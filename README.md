@@ -12,13 +12,36 @@ Eigener Bot, unabhängig vom evobot. Zwei Bausteine aus **einer Kasse** auf Bitg
    Einsatz 10 % des Kontos, wenn unter dem Kurs kaum noch Liquidationen liegen (Modell-Karte aus 90 Tagen Open Interest), sonst 5 %; Hebel 1, höchstens 20 gleichzeitig.
    Kapitulations-Trades haben Vorrang: Fehlt Kasse, gibt der BTC-Anteil Margin ab. Solange der BTC-Anteil offen ist, ruhen eigene BTC-Kapitulationssignale.
 
-## Ergebnisse (09/2020 – 11/2026, mit kapbots eigenem Code nachgespielt, Kontobewertung stündlich)
+![Ablauf: vier Bedingungen → Long 24 h, daneben der BTC-Trend-Anteil aus derselben Kasse](docs/images/ablauf.png)
+
+## Ergebnisse (01.09.2020 – 19.11.2026, mit kapbots eigenem Code nachgespielt, Kontobewertung stündlich)
 
 | | Ende (Start 100) | pro Jahr | größter Rückgang |
 |---|---|---|---|
 | **kapbot (BTC-Trend + Kapitulation)** | **3.431** | **+77 %** | **−45 %** |
 | davon 2024–2026 (Prüfzeitraum) | | +51 % | −32 % |
-| BTC halten | 509 | +30 % | −77 % |
+| BTC halten (gleicher Zeitraum) | 530 | +31 % | −77 % |
+
+![Kontowert kapbot gegen BTC halten, log. Skala, darunter der Rückgang vom Höchststand](docs/images/konto.png)
+
+Beide Hälften sind positiv (9/2020–9/2023: +89 %/J, 10/2023–11/2026: +65 %/J). Im Nachspiel: 1.648 Kapitulations-Trades
+(732 mit 10 %, 916 mit 5 % Einsatz), 73 Buchungen des BTC-Trend-Anteils, keine Liquidation.
+
+![Konto je Kalenderjahr und Monatsrenditen](docs/images/jahre_monate.png)
+
+### Wie selten das Signal ist
+
+Von knapp 63.000 Flush-Kerzen bleiben nach allen vier Bedingungen 5.063 übrig; die Coin-Sperre (24 h je Coin) macht daraus 1.789
+Forschungs-Trades, im Konto handelt kapbot davon 1.648 (der Rest fällt in Momente ohne freies Kapital bzw. mit BTC-Anteil auf BTC).
+
+![Trichter: Flush → Abwärtstrend → Open Interest → Kleinanleger → Trades](docs/images/trichter.png)
+
+### Ein typischer Trade
+
+Ein echter Trade aus dem Nachspiel mit einem Ergebnis nahe am Median (gelb gestrichelt = Signalkerze, grün = 24 h Haltedauer):
+Kurs fällt im Flush, Open Interest bricht weg, der Long-Anteil der Kleinanleger sinkt unter den Wert von vor 72 h.
+
+![AAVE 04.06.2026: Kursverlauf mit Kauf und Verkauf, Open Interest und Long-Anteil der Kleinanleger](docs/images/beispiel_trade.png)
 
 Die Regel wurde präregistriert gesucht und auf Daten geprüft, die bei der Auswahl nicht verwendet wurden: 2024–26 (+1,80 %/Trade),
 5 + 10 + 10 + 30 neue Coins (+1,01 / +1,44 / +1,65 / +1,28 %/Trade), die Trend-Regel außerhalb der Stichprobe (BTC 2018–20, ETH 2020–26).
@@ -66,3 +89,4 @@ Schlüssel `secret.json` → `kapbot`.
 - `python tools/parity_signale.py` – Live-Regel gegen alle 1.789 Forschungssignale (exakt)
 - `python tools/parity_ll3.py` – Liquidationskarte (90 Tage) gegen die Forschung (98,4 % gleiche Einstufung)
 - `python tools/nachspiel.py` – Konto 2020–2026 mit dem Bot-Code (Ergebnis oben)
+- `python tools/readme_grafiken.py` – erzeugt die Bilder in `docs/images/` aus dem Nachspiel (Desktop, braucht pandas + matplotlib)
