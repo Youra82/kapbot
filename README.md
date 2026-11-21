@@ -12,17 +12,19 @@ Eigener Bot, unabhängig vom evobot. Zwei Bausteine aus **einer Kasse** auf Bitg
    Einsatz 10 % des Kontos, wenn unter dem Kurs kaum noch Liquidationen liegen (Modell-Karte aus 90 Tagen Open Interest), sonst 5 %; Hebel 1, höchstens 20 gleichzeitig.
    Kapitulations-Trades haben Vorrang: Fehlt Kasse, gibt der BTC-Anteil Margin ab. Solange der BTC-Anteil offen ist, ruhen eigene BTC-Kapitulationssignale.
 
-## Ergebnisse (Backtest 09/2020 – 11/2026, Bewertung offener Positionen alle 30 min)
+## Ergebnisse (09/2020 – 11/2026, mit kapbots eigenem Code nachgespielt, Kontobewertung stündlich)
 
 | | Ende (Start 100) | pro Jahr | größter Rückgang |
 |---|---|---|---|
-| **kapbot (BTC-Trend + Kapitulation)** | **3.615** | **+78 %** | **−45 %** |
-| Prüfung 2024–2026 allein | | +57 % | −34 % |
+| **kapbot (BTC-Trend + Kapitulation)** | **3.431** | **+77 %** | **−45 %** |
+| davon 2024–2026 (Prüfzeitraum) | | +51 % | −32 % |
 | BTC halten | 509 | +30 % | −77 % |
 
 Die Regel wurde präregistriert gesucht und auf Daten geprüft, die bei der Auswahl nicht verwendet wurden: 2024–26 (+1,80 %/Trade),
 5 + 10 + 10 + 30 neue Coins (+1,01 / +1,44 / +1,65 / +1,28 %/Trade), die Trend-Regel außerhalb der Stichprobe (BTC 2018–20, ETH 2020–26).
 Forschung, Präregistrierungen und Skripte: `botprojekte/forschung/2026-11-20-btc-abverkaeufe/`.
+
+**Nachspiel:** `tools/nachspiel.py` führt die Bot-Funktionen selbst (`pruefbar`, `kauf`, `exits`, `trend` → `btc_trend.step`/`free_margin`, `markt.Konto`) Ereignis für Ereignis auf den historischen Binance-Daten aus; ersetzt werden nur die Datenquellen. Jeder Bot-Trade ist ein Forschungssignal (1.648 von 1.789; die übrigen fallen in Momente ohne freies Kapital bzw. mit BTC-Anteil auf BTC). Unterschiede zu live: Kurse von Binance statt Bitget, Funding des BTC-Anteils im Papier pauschal 10 %/J (wie der Bot bucht).
 
 ## Schalter (`settings.json`)
 
@@ -63,3 +65,4 @@ Schlüssel `secret.json` → `kapbot`.
 - `python -m unittest discover -s tests` (offline, keine Netz- oder Order-Aufrufe)
 - `python tools/parity_signale.py` – Live-Regel gegen alle 1.789 Forschungssignale (exakt)
 - `python tools/parity_ll3.py` – Liquidationskarte (90 Tage) gegen die Forschung (98,4 % gleiche Einstufung)
+- `python tools/nachspiel.py` – Konto 2020–2026 mit dem Bot-Code (Ergebnis oben)

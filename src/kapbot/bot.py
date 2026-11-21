@@ -259,6 +259,57 @@ def exits(k, live, now_ms, log):
                    + (' (LIQUIDIERT)' if liquidated else ''))
 
 
+def pruefbar(k, coin, t):
+    """Darf Kerze t dieses Coins überhaupt ein Signal werden? (Live und Nachspiel identisch.)"""
+    if coin == 'BTC' and (k.s.get('btc_trend') or {}).get('pos'):
+        return False                                   # BTC-Anteil offen: gleiches Symbol, anderer Hebel → kein kapbot-BTC
+    return k.s['busy'].get(coin, 0) <= t
+
+
+def kauf(k, live, sw, coin, t, feat, e_close, now_ms, log, l3_fn):
+    """Kauf-Entscheidung und Buchung nach einem Signal in Kerze t (Live und Nachspiel identisch):
+    Coin belegen, Höchstzahl, Einsatz nach Liquidationszone (l3_fn), Vorrang vor dem BTC-Anteil, Einstieg, Buchung."""
+    k.s['busy'][coin] = t + R.HOLD_BARS * BAR          # wie Forschung: neues Signal ab der Kerze, in der der alte Trade endet
+    if len(k.s['positions']) >= sw['kap_max_offen']:
+        log.append(f'{coin}: schon {len(k.s["positions"])} Positionen offen – übersprungen'); return
+    t_in = now_ms // 60_000 * 60_000
+    if live is not None and t_in - (t + BAR) > LIVE_MAX_DELAY_MS:
+        log.append(f'{coin}: Signal zu alt für Echtgeld'); return
+    lev = sw['kap_hebel']
+    try:
+        l3 = l3_fn()
+    except Exception as e:
+        l3 = None; log.append(f'Liquidationskarte {coin}: {type(e).__name__}')
+    frac = R.einsatz(l3, sw['kap_einsatz'], sw['kap_einsatz_viel'])
+    want = frac * k.equity()
+    if want > k.s['cash'] and (k.s.get('btc_trend') or {}).get('pos'):
+        try:                                       # Vorrang kapbot: BTC-Anteil gibt anteilig Margin ab
+            BT.free_margin(k, want - k.s['cash'], now_ms, log, live, price_fn=_btc_price)
+        except Exception as e:
+            log.append(f'BTC-Trend Margin-Abgabe Fehler: {type(e).__name__}')
+    stake = min(k.s['cash'], want)
+    if stake * lev < A.MIN_NOTIONAL:
+        log.append(f'{coin}: Einsatz {stake:.2f} USDT zu klein'); return
+    extra = {}
+    if live is not None:
+        got = A.live_entry(k, live, 'kapbot', coin, stake, lev, t_in, log)
+        if got is None:
+            return
+        px, extra = got
+    else:
+        px = _paper_px(coin, t_in)
+        if px is None:
+            log.append(f'kein Bitget-Kurs {coin}'); return
+    k.s['cash'] -= stake
+    k.s['positions'].append({'art': 'kapbot', 'genom': 'kapbot', 'coin': coin, 'signal_ms': t,
+                             'entry_ms': t_in, 'entry_px': px, 'entry_eff': px * (1 + A.SPREAD) * (1 + A.FEE),
+                             'stake': stake, 'lev': lev, 'exit_ms': t + (R.HOLD_BARS + 1) * BAR,
+                             'z': round(feat['z'], 2), 'dd': round(feat['dd'], 4), 'oi_drop': round(feat['oi_drop'], 4),
+                             'll3': None if l3 is None else round(l3, 6), 'einsatz_anteil': frac, **extra})
+    log.append(f"EINSTIEG {coin} Long {lev}x zu {px}, Einsatz {stake:.2f} USDT ({100 * frac:.0f} %, "
+               f"{'wenig' if frac == sw['kap_einsatz'] else 'viel/unbekannt'} Liquidationen darunter)" + (' [ECHT]' if extra else ''))
+
+
 def entries(k, live, sw, now_ms, log, folder: Path):
     folder.mkdir(parents=True, exist_ok=True)
     pend = k.s.setdefault('pending', {})
@@ -281,9 +332,7 @@ def entries(k, live, sw, now_ms, log, folder: Path):
         bars = sorted({b for b in range(first, newest + BAR, BAR)} | {int(b) for b in pend.get(coin, [])})
         keep = []
         for t in bars:
-            if coin == 'BTC' and (k.s.get('btc_trend') or {}).get('pos'):
-                continue                                   # BTC-Anteil offen: gleiches Symbol, anderer Hebel → kein kapbot-BTC
-            if k.s['busy'].get(coin, 0) > t:
+            if not pruefbar(k, coin, t):
                 continue
             w = pf.window(t)
             if w is None:
@@ -306,45 +355,8 @@ def entries(k, live, sw, now_ms, log, folder: Path):
                        f"{'fallend' if feat['retail_falling'] else 'nicht fallend'} → {'KAUF' if buy else 'kein Kauf'}")
             if not buy:
                 continue
-            k.s['busy'][coin] = t + (R.HOLD_BARS + 1) * BAR
-            if len(k.s['positions']) >= sw['kap_max_offen']:
-                log.append(f'{coin}: schon {len(k.s["positions"])} Positionen offen – übersprungen'); continue
-            t_in = now_ms // 60_000 * 60_000
-            if live is not None and t_in - (t + BAR) > LIVE_MAX_DELAY_MS:
-                log.append(f'{coin}: Signal zu alt für Echtgeld'); continue
-            lev = sw['kap_hebel']
-            try:
-                l3 = ll3_live(folder.parent / 'oi', coin, t, w[-1])
-            except Exception as e:
-                l3 = None; log.append(f'Liquidationskarte {coin}: {type(e).__name__}')
-            frac = R.einsatz(l3, sw['kap_einsatz'], sw['kap_einsatz_viel'])
-            want = frac * k.equity()
-            if want > k.s['cash'] and (k.s.get('btc_trend') or {}).get('pos'):
-                try:                                       # Vorrang kapbot: BTC-Anteil gibt anteilig Margin ab
-                    BT.free_margin(k, want - k.s['cash'], now_ms, log, live, price_fn=_btc_price)
-                except Exception as e:
-                    log.append(f'BTC-Trend Margin-Abgabe Fehler: {type(e).__name__}')
-            stake = min(k.s['cash'], want)
-            if stake * lev < A.MIN_NOTIONAL:
-                log.append(f'{coin}: Einsatz {stake:.2f} USDT zu klein'); continue
-            extra = {}
-            if live is not None:
-                got = A.live_entry(k, live, 'kapbot', coin, stake, lev, t_in, log)
-                if got is None:
-                    continue
-                px, extra = got
-            else:
-                px = _paper_px(coin, t_in)
-                if px is None:
-                    log.append(f'kein Bitget-Kurs {coin}'); continue
-            k.s['cash'] -= stake
-            k.s['positions'].append({'art': 'kapbot', 'genom': 'kapbot', 'coin': coin, 'signal_ms': t,
-                                     'entry_ms': t_in, 'entry_px': px, 'entry_eff': px * (1 + A.SPREAD) * (1 + A.FEE),
-                                     'stake': stake, 'lev': lev, 'exit_ms': t + (R.HOLD_BARS + 1) * BAR,
-                                     'z': round(feat['z'], 2), 'dd': round(feat['dd'], 4), 'oi_drop': round(feat['oi_drop'], 4),
-                                     'll3': None if l3 is None else round(l3, 6), 'einsatz_anteil': frac, **extra})
-            log.append(f"EINSTIEG {coin} Long {lev}x zu {px}, Einsatz {stake:.2f} USDT ({100 * frac:.0f} %, "
-                       f"{'wenig' if frac == sw['kap_einsatz'] else 'viel/unbekannt'} Liquidationen darunter)" + (' [ECHT]' if extra else ''))
+            kauf(k, live, sw, coin, t, feat, w[-1], now_ms, log,
+                 lambda: ll3_live(folder.parent / 'oi', coin, t, w[-1]))
         pend[coin] = keep
         last_bar[coin] = newest
 
