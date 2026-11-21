@@ -163,7 +163,10 @@ class Puffer:
         self.t, self.c = array('q'), array('d')
         if self.ft.exists() and self.fc.exists():
             self.t.frombytes(self.ft.read_bytes()); self.c.frombytes(self.fc.read_bytes())
-            n = min(len(self.t), len(self.c)); del self.t[n:]; del self.c[n:]
+            n = min(len(self.t), len(self.c))
+            if len(self.t) != len(self.c):                   # nach Absturz zwischen den zwei Schreibvorgängen: auf Platte angleichen
+                del self.t[n:]; del self.c[n:]
+                self.ft.write_bytes(self.t.tobytes()); self.fc.write_bytes(self.c.tobytes())
 
     def last(self):
         return self.t[-1] if self.t else None
@@ -207,10 +210,15 @@ def _btc_daily():
 def trend(k, live, faktor, hebel, now_ms, log):
     """BTC-Trend-Anteil der gelben Linie (kapbot.btc_trend, nur Long): Nominal = faktor × Kontowert bei Hebel hebel, solange BTC am
     Vortag über SMA200 und SMA50 schloss; sonst (oder faktor 0) geschlossen. Einmal je UTC-Tag, Liquidation jeden Lauf."""
-    if faktor <= 0 and not (k.s.get('btc_trend') or {}).get('pos'):
+    st = k.s.get('btc_trend') or {}
+    if faktor <= 0 and not st.get('pos') and not st.get('intent'):
         return
     try:
-        BT.step(k, _btc_daily(), now_ms, log, faktor, live, price_fn=_btc_price, lev=hebel, low_fn=_btc_low, short_faktor=0.0)
+        daily = _btc_daily() if faktor > 0 else None          # Fehler hier blockiert nicht Liquidationsprüfung/Schließen
+    except Exception as e:
+        daily = None; log.append(f'BTC-Trend Tagesdaten: {type(e).__name__}')
+    try:
+        BT.step(k, daily, now_ms, log, faktor, live, price_fn=_btc_price, lev=hebel, low_fn=_btc_low, short_faktor=0.0)
     except Exception as e:
         log.append(f'BTC-Trend Fehler: {type(e).__name__}')
 
@@ -224,15 +232,26 @@ def exits(k, live, now_ms, log):
         if p['exit_ms'] > now_ms - 60_000:
             continue
         lev = p.get('lev', 1)
-        if live is not None and p.get('size'):
-            f, liquidated = A.live_exit(k, live, p, log)
+        if p.get('live'):                                  # Echtgeld-Trade (auch mit Restmenge 0 nach Teil-Closes)
+            if live is None:
+                continue
+            try:
+                f, liquidated = A.live_exit(k, live, p, now_ms, log)
+            except Exception as e:
+                log.append(f"Ausstieg {p['coin']}: Fehler {type(e).__name__} – nächster Lauf versucht erneut"); continue
             if f == 'offen':
                 continue
             if liquidated:
-                px, r = None, -1 / lev
+                px, r = None, A.live_liquidation_r(p)       # realisierte Teil-Closes zählen, Rest verliert die Margin
             else:
                 px, qty, fee_out = f
                 r = ((px - p['entry_px']) * qty - p.get('fee_in', 0.0) - fee_out) / (p['stake'] * lev)
+                try:                                       # Funding auf die echte Menge (Anteil am Positionswert × Wert / Einsatz)
+                    fa = A.bitget_funding_anteil(A.BITGET_SYMBOL.get(p['coin'], p['coin']) + 'USDT', p['entry_ms'], p['exit_ms'], 1)
+                    p['funding_r'] = fa * p['entry_px'] * qty / (p['stake'] * lev)
+                except Exception:
+                    p['funding_r'], p['funding_unvollstaendig'] = 0.0, True
+                r += p['funding_r']
         else:
             px = _paper_px(p['coin'], p['exit_ms'])
             if px is None:
@@ -261,8 +280,10 @@ def exits(k, live, now_ms, log):
 
 def pruefbar(k, coin, t):
     """Darf Kerze t dieses Coins überhaupt ein Signal werden? (Live und Nachspiel identisch.)"""
-    if coin == 'BTC' and (k.s.get('btc_trend') or {}).get('pos'):
+    if coin == 'BTC' and ((k.s.get('btc_trend') or {}).get('pos') or (k.s.get('btc_trend') or {}).get('intent')):
         return False                                   # BTC-Anteil offen: gleiches Symbol, anderer Hebel → kein kapbot-BTC
+    if any(p['coin'] == coin for p in k.s['positions']) or any(v['coin'] == coin for v in k.s.get('pending_live', [])):
+        return False                                   # alter Trade noch nicht geschlossen (z. B. Ausstieg fehlgeschlagen)
     return k.s['busy'].get(coin, 0) <= t
 
 
@@ -270,11 +291,14 @@ def kauf(k, live, sw, coin, t, feat, e_close, now_ms, log, l3_fn):
     """Kauf-Entscheidung und Buchung nach einem Signal in Kerze t (Live und Nachspiel identisch):
     Coin belegen, Höchstzahl, Einsatz nach Liquidationszone (l3_fn), Vorrang vor dem BTC-Anteil, Einstieg, Buchung."""
     k.s['busy'][coin] = t + R.HOLD_BARS * BAR          # wie Forschung: neues Signal ab der Kerze, in der der alte Trade endet
-    if len(k.s['positions']) >= sw['kap_max_offen']:
-        log.append(f'{coin}: schon {len(k.s["positions"])} Positionen offen – übersprungen'); return
+    belegt = len(k.s['positions']) + len(k.s.get('pending_live', []))
+    if belegt >= sw['kap_max_offen']:
+        log.append(f'{coin}: schon {belegt} Positionen offen – übersprungen'); return
     t_in = now_ms // 60_000 * 60_000
     if live is not None and t_in - (t + BAR) > LIVE_MAX_DELAY_MS:
         log.append(f'{coin}: Signal zu alt für Echtgeld'); return
+    if live is not None and 'live_since' not in k.s:
+        log.append('Echtgeld-Konto noch nicht initialisiert – kein Einstieg'); return
     lev = sw['kap_hebel']
     try:
         l3 = l3_fn()
@@ -290,24 +314,54 @@ def kauf(k, live, sw, coin, t, feat, e_close, now_ms, log, l3_fn):
     stake = min(k.s['cash'], want)
     if stake * lev < A.MIN_NOTIONAL:
         log.append(f'{coin}: Einsatz {stake:.2f} USDT zu klein'); return
-    extra = {}
+    meta = {'art': 'kapbot', 'genom': 'kapbot', 'exit_ms': t + (R.HOLD_BARS + 1) * BAR,
+            'z': round(feat['z'], 2), 'dd': round(feat['dd'], 4), 'oi_drop': round(feat['oi_drop'], 4),
+            'll3': None if l3 is None else round(l3, 6), 'einsatz_anteil': frac}
     if live is not None:
-        got = A.live_entry(k, live, 'kapbot', coin, stake, lev, t_in, log)
-        if got is None:
+        pos = A.live_kauf(k, live, 'kapbot', coin, t, t_in, stake, lev, meta, log)
+        if not isinstance(pos, dict):
             return
-        px, extra = got
+        px, stake = pos['entry_px'], pos['stake']
     else:
         px = _paper_px(coin, t_in)
         if px is None:
             log.append(f'kein Bitget-Kurs {coin}'); return
-    k.s['cash'] -= stake
-    k.s['positions'].append({'art': 'kapbot', 'genom': 'kapbot', 'coin': coin, 'signal_ms': t,
-                             'entry_ms': t_in, 'entry_px': px, 'entry_eff': px * (1 + A.SPREAD) * (1 + A.FEE),
-                             'stake': stake, 'lev': lev, 'exit_ms': t + (R.HOLD_BARS + 1) * BAR,
-                             'z': round(feat['z'], 2), 'dd': round(feat['dd'], 4), 'oi_drop': round(feat['oi_drop'], 4),
-                             'll3': None if l3 is None else round(l3, 6), 'einsatz_anteil': frac, **extra})
+        k.s['cash'] -= stake
+        k.s['positions'].append({**meta, 'coin': coin, 'signal_ms': t, 'entry_ms': t_in, 'entry_px': px,
+                                 'entry_eff': px * (1 + A.SPREAD) * (1 + A.FEE), 'stake': stake, 'lev': lev})
     log.append(f"EINSTIEG {coin} Long {lev}x zu {px}, Einsatz {stake:.2f} USDT ({100 * frac:.0f} %, "
-               f"{'wenig' if frac == sw['kap_einsatz'] else 'viel/unbekannt'} Liquidationen darunter)" + (' [ECHT]' if extra else ''))
+               f"{'wenig' if frac == sw['kap_einsatz'] else 'viel/unbekannt'} Liquidationen darunter)" + (' [ECHT]' if live is not None else ''))
+
+
+def resolve_pending(k, live, log, now_ms):
+    """Echtgeld-Einstiege mit unklarem Ergebnis per clientOid nachschlagen und buchen (markt.resolve_pending)."""
+    for p in A.resolve_pending(k, live, now_ms, log):
+        p['nachgebucht'] = True; k.save()
+        log.append(f"EINSTIEG {p['coin']} nachgebucht (Order bestätigt) zu {p['entry_px']} [ECHT]")
+
+
+def fremde_positionen(k, live, now_ms, log):
+    """Mehr Long-Menge auf der Börse als eigene Positionen → ein anderer Bot (z. B. kapbot) handelt auf demselben Konto.
+    Ausstiege schließen nur die eigene Menge, aber Liquidationen und Margin sind dann nicht mehr sauber zuzuordnen."""
+    from . import bitget as BG
+    try:
+        have = live.positions()
+    except Exception:
+        return
+    own = {}
+    for p in k.s['positions']:
+        if p.get('size'):
+            own[BG.symbol(p['coin'])] = own.get(BG.symbol(p['coin']), 0.0) + p['size']
+    tp = (k.s.get('btc_trend') or {}).get('pos')
+    if tp and tp.get('size') and tp.get('side', 1) == 1:          # eigener BTC-Trend-Anteil
+        own['BTCUSDT'] = own.get('BTCUSDT', 0.0) + tp['size']
+    day = datetime.fromtimestamp(now_ms / 1000, timezone.utc).strftime('%Y-%m-%d')
+    seen = k.s.setdefault('warn_fremd', {})
+    for (sym, hold), q in have.items():
+        if hold == 'long' and q > own.get(sym, 0.0) + 1e-9 and seen.get(sym) != day:
+            seen[sym] = day
+            log.append(f'WARNUNG {sym}: {q} long auf Bitget, eigene {own.get(sym, 0.0)} – fremde Position auf diesem Konto? '
+                       f'Eigenes Unterkonto verwenden.')
 
 
 def entries(k, live, sw, now_ms, log, folder: Path):
@@ -345,7 +399,7 @@ def entries(k, live, sw, now_ms, log, folder: Path):
                 g_now, g_lag = ratio_at(coin, t), ratio_at(coin, t - R.R_LAG_BARS * BAR)
             except Exception as e:
                 log.append(f'OI/Long-Short-Fehler {coin}: {type(e).__name__}'); ois = g_now = None
-            if ois is None or g_now is None:
+            if ois is None or g_now is None or g_lag is None:
                 if now_ms - t < PENDING_MAX_MS:
                     keep.append(t)                         # Werte noch nicht veröffentlicht → nächster Takt
                 continue
@@ -410,11 +464,12 @@ def run(base: Path, telegram=False, now_ms=None, live=None, schalter=None, hook=
         msg = "kapbot: echtgeld.aktiv = true, aber secret.json hat keinen Bitget-Zugang 'kapbot' – keine Trades."
         log.append(msg)
         if hook and not (base / 'ohne_zugang.flag').exists():
-            (base / 'ohne_zugang.flag').write_text('1', encoding='utf-8')
-            try: hook(msg)
-            except Exception: pass
-        return log
-    (base / 'ohne_zugang.flag').unlink(missing_ok=True)
+            try:
+                hook(msg); (base / 'ohne_zugang.flag').write_text('1', encoding='utf-8')
+            except Exception:
+                pass
+    else:
+        (base / 'ohne_zugang.flag').unlink(missing_ok=True)
     for modus in ('papier', 'echtgeld'):
         aktiv = (modus == 'papier') == papier
         lv = live if modus == 'echtgeld' else None
@@ -422,14 +477,24 @@ def run(base: Path, telegram=False, now_ms=None, live=None, schalter=None, hook=
         if not aktiv and not (d / 'konto.json').exists():
             continue
         k = konto(base, modus, sw.get('kap_papier_start', 100.0))
-        if not aktiv and not k.s['positions'] and not (k.s.get('btc_trend') or {}).get('pos'):
+        if (not aktiv and not k.s['positions'] and not (k.s.get('btc_trend') or {}).get('pos') and not k.s.get('pending_live')
+                and not (k.s.get('btc_trend') or {}).get('intent')):
             continue
         if modus == 'echtgeld' and lv is None:
             log.append(f"{len(k.s['positions'])} offene Echtgeld-Position(en), aber kein Zugang – Ausstieg nicht möglich")
             continue
         sub = []
         if lv is not None:
-            A.live_sync(k, lv, now_ms, sub); k.save()
+            try:
+                A.live_sync(k, lv, now_ms, sub); k.save()
+            except SystemExit:
+                raise
+            except Exception as e:
+                sub.append(f'Kontoabgleich: {type(e).__name__} – Ausstiege laufen trotzdem')
+                if 'live_since' not in k.s:
+                    sub.append('Echtgeld-Konto nicht initialisiert – keine Ausstiege/Einstiege möglich'); log += sub; continue
+            resolve_pending(k, lv, sub, now_ms); k.save()
+            fremde_positionen(k, lv, now_ms, sub)
         exits(k, lv, now_ms, sub)
         k.save()
         tf = sw['kap_trend_faktor'] if (aktiv and sw['kapbot'] and sw['kap_trend']) else 0.0
@@ -444,7 +509,7 @@ def run(base: Path, telegram=False, now_ms=None, live=None, schalter=None, hook=
         log += [prefix + x for x in sub]
         if hook:
             for line in sub:
-                if line.startswith(('EINSTIEG', 'AUSSTIEG', 'BTC-Trend')):
+                if line.startswith(('EINSTIEG', 'AUSSTIEG', 'BTC-Trend', 'WARNUNG')):
                     try: hook(prefix + 'kapbot: ' + line)
                     except Exception: pass
             day = datetime.fromtimestamp(now_ms / 1000, timezone.utc).strftime('%Y-%m-%d')
@@ -461,9 +526,11 @@ def bericht(k):
             'offen': [{'coin': p['coin'], 'einsatz': round(p['stake'], 2), 'einstieg': p['entry_px'],
                        'ausstieg_utc': datetime.fromtimestamp(p['exit_ms'] / 1000, timezone.utc).strftime('%d.%m. %H:%M')}
                       for p in k.s['positions']],
+            'btc_trend': (lambda tp: None if not tp else {'margin': round(tp['margin'], 2), 'nominal': round(tp['notional'], 2),
+                                                          'einstand': tp['entry_px'], 'hebel': tp.get('lev')})((k.s.get('btc_trend') or {}).get('pos')),
             'trades': len(cl), 'treffer_%': round(100 * sum(r > 0 for r in rs) / len(rs), 1) if rs else None,
             'mittel_%': round(100 * sum(rs) / len(rs), 2) if rs else None,
-            'gewinn_usdt': round(sum(c['stake'] * c.get('lev', 1) * c['r'] for c in cl), 2)}
+            'gewinn_usdt': round(sum(max(-c['stake'], c['stake'] * c.get('lev', 1) * c['r']) for c in cl), 2)}
 
 
 def bericht_text(k):
@@ -472,6 +539,8 @@ def bericht_text(k):
          f"Trades {b['trades']}" + (f", Treffer {b['treffer_%']:.0f} %, Ø {b['mittel_%']:+.2f} %, Gewinn {b['gewinn_usdt']:+.2f} USDT" if b['trades'] else '')]
     for p in b['offen']:
         z.append(f"offen {p['coin']}: Einsatz {p['einsatz']:.2f} USDT, Ausstieg {p['ausstieg_utc']} UTC")
+    if b.get('btc_trend'):
+        t = b['btc_trend']; z.append(f"BTC-Trend offen: Margin {t['margin']:.2f} USDT, Nominal {t['nominal']:.2f} USDT ({t['hebel']}x)")
     return '\n'.join(z)
 
 
@@ -493,7 +562,11 @@ def main(argv=None):
         cred = (json.loads(sec.read_text(encoding='utf-8-sig')).get('kapbot') or [None])[0]
     except (OSError, ValueError):
         cred = None
-    if cred and (sw['kap_echtgeld'] or (a.data / MODI['echtgeld'] / 'konto.json').exists()):
+    eg = a.data / MODI['echtgeld'] / 'konto.json'
+    egk = A.Konto(eg) if eg.exists() else None
+    eg_offen = bool(egk and (egk.s['positions'] or egk.s.get('pending_live') or (egk.s.get('btc_trend') or {}).get('pos')
+                             or (egk.s.get('btc_trend') or {}).get('intent')))
+    if cred and cred.get('apiKey') and cred.get('secret') and cred.get('password') and (sw['kap_echtgeld'] or eg_offen):
         from . import bitget as BG
         live = BG.Bitget(cred, enabled=True); live.ensure_hedge_mode()
     for line in run(a.data, telegram=a.telegram, live=live, schalter=sw):

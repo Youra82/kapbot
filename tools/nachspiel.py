@@ -131,10 +131,13 @@ def main(argv=None):
         while True:
             nxt_e = ev[ei][0] if ei < len(ev) else None
             nxt_x = min((p['exit_ms'] + 60_000 for p in k.s['positions']), default=None)
-            cand = [x_ for x_ in (nxt_e, nxt_x) if x_ is not None and x_ < h]
+            cand = [x_ for x_ in (nxt_e, nxt_x) if x_ is not None and x_ <= h]   # Ereignisse genau zur vollen Stunde vor der Bewertung
             if not cand:
                 break
             now = min(cand); batch = []
+            if now == state.get('zuletzt') and not (ei < len(ev) and ev[ei][0] == now):
+                break                                   # fälliger Ausstieg blieb offen → nicht endlos wiederholen
+            state['zuletzt'] = now
             while ei < len(ev) and ev[ei][0] == now:
                 batch.append(ev[ei]); ei += 1
             takt(now, batch)

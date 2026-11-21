@@ -147,17 +147,20 @@ class Bitget:
     def transfers(self, since_ms, until_ms=None):
         """Ein-/Auszahlungen [(billId, t_ms, betrag)] seit since_ms (Bitget-Kontobuchungen, Typen TRANSFER_TYPES)."""
         until_ms = until_ms or self.clock(); out = []; t0 = since_ms
+        ids = set()
         while t0 < until_ms:
-            t1 = min(until_ms, t0 + 30 * 86_400_000); last = None
+            t1 = min(until_ms, t0 + 30 * 86_400_000); last = None; cursors = set()
             while True:
                 q = dict(productType=PRODUCT, startTime=t0, endTime=t1, limit=100)
                 if last: q['idLessThan'] = last
                 d = self.get('/api/v2/mix/account/bill', **q) or {}
                 bills = d.get('bills') or []
-                out += [(b['billId'], int(b['cTime']), float(b['amount'])) for b in bills
-                        if b.get('businessType') in TRANSFER_TYPES and b.get('coin', 'USDT') == 'USDT']
-                if len(bills) < 100: break
-                last = d.get('endId')
+                for b in bills:
+                    if b.get('businessType') in TRANSFER_TYPES and b.get('coin', 'USDT') == 'USDT' and b['billId'] not in ids:
+                        ids.add(b['billId']); out.append((b['billId'], int(b['cTime']), float(b['amount'])))
+                nxt = d.get('endId')
+                if len(bills) < 100 or not nxt or nxt in cursors: break
+                cursors.add(nxt); last = nxt
             t0 = t1
         return sorted(out, key=lambda x: x[1])
 

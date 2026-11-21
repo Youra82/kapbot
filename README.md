@@ -18,7 +18,7 @@ Eigener Bot, unabhängig vom evobot. Zwei Bausteine aus **einer Kasse** auf Bitg
 
 | | Ende (Start 100) | pro Jahr | größter Rückgang |
 |---|---|---|---|
-| **kapbot (BTC-Trend + Kapitulation)** | **3.431** | **+77 %** | **−45 %** |
+| **kapbot (BTC-Trend + Kapitulation)** | **3.429** | **+77 %** | **−45 %** |
 | davon 2024–2026 (Prüfzeitraum) | | +51 % | −32 % |
 | BTC halten (gleicher Zeitraum) | 530 | +31 % | −77 % |
 
@@ -77,6 +77,23 @@ sudo systemctl start kapbot.service ; journalctl -u kapbot -n 40
 ```
 Erster Lauf lädt 90 Tage 5m-Kerzen und Open Interest für 30 Coins (≈ 10–15 min, ≈ 15 MB in `data/`), danach wenige Sekunden je Lauf.
 Bericht: `.venv/bin/python -m kapbot bericht` · Update: `./update.sh`.
+
+## Echtgeld-Absicherung (Codex-Review 21.11.2026, zwei Prüfrunden)
+
+- **Kein Doppelkauf:** Jede Order hat eine feste clientOid (aus dem Signal bzw. fortlaufend), die zusammen mit der reservierten Margin **vor**
+  dem Senden gespeichert wird. Nach Netzfehler oder Absturz schlägt der nächste Lauf genau diese Order nach und bucht die gefüllte Menge.
+  Eine unauffindbare Order wird erst nach 15 min, 3 leeren Abfragen und ohne unerklärte Börsenmenge freigegeben, sonst kommt eine Warnung.
+- **Keine falsche Liquidation:** Zuerst wird die eigene Close-Order nachgeschlagen. Fehlt Menge ohne eigenen Close, gilt das erst nach
+  10 min als Liquidation. Bereits realisierte Teil-Closes zählen dabei mit.
+- **Gebucht wird die tatsächliche Füllung** (Menge, Kurs, Gebühren, Funding). Order-IDs werden nur einmal gebucht, und Vormerkungen zählen zu `max_offen`.
+- **Fehler isoliert:** Ein Fehler im Kontoabgleich oder bei einem Ausstieg blockiert die übrigen Ausstiege nicht. Ohne gesicherte
+  Echtgeld-Initialisierung gibt es keine Einstiege, und ohne Zugang laufen die Papier-Ausstiege weiter.
+- **Fremde Positionen** auf demselben Bitget-Konto werden einmal am Tag gemeldet. Trotzdem gilt: **eigenes Unterkonto je Bot.**
+- **BTC-Trend:** Absichten mit fortlaufender clientOid. Teilabgaben werden aus der eigenen BTC-Menge berechnet. BTC gehört immer nur
+  einer Strategie (Trend oder Kapitulation). Faktor 0 schließt sofort, und ohne vollständige Tagesdaten fällt keine Regime-Entscheidung.
+- `update.sh` wartet auf einen laufenden Takt und pausiert den Timer bis zum Ende des Updates.
+- Bewusste Grenzen: Das Konto ist ein Buchwert (offene Gewinne zählen erst beim Ausstieg), und Funding wird aus den Bitget-Sätzen des
+  Haltefensters berechnet. Eine aggregierte Symbolposition, die mit einem anderen Bot geteilt wird, ist nicht sauber zuzuordnen.
 
 ## Cockpit
 

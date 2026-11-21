@@ -2,6 +2,14 @@
 # Sicheres Update: holt den Repo-Stand, behaelt secret.json und den Papier/Echtgeld-Schalter (settings.json echtgeld).
 set -eu
 cd "$(dirname "$0")"
+# laufenden Takt nicht unterbrechen (offene Orders), Timer pausieren; Timer läuft am Ende (auch nach Fehler) wieder
+trap 'sudo systemctl start kapbot.timer 2>/dev/null || true' EXIT
+sudo systemctl stop kapbot.timer 2>/dev/null || true
+N=0
+while systemctl is-active --quiet kapbot.service 2>/dev/null; do
+    N=$((N + 1)); [ "$N" -le 360 ] || { echo "kapbot-Takt läuft seit 30 min – Update abgebrochen, bitte prüfen" >&2; exit 1; }
+    echo "warte auf laufenden kapbot-Takt ..."; sleep 5
+done
 if git ls-files --error-unmatch secret.json >/dev/null 2>&1 || test -n "$(git ls-files data/)"; then
     echo 'Abbruch: secret.json oder data/ ist im Git erfasst.' >&2; exit 1
 fi

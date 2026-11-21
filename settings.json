@@ -17,6 +17,6 @@
     "aktiv": true,
     "faktor": 1.0,
     "hebel": 5,
-    "_info": "BTC-Trend-Anteil (long faktor × Kontowert bei hebel, isoliert), solange BTC am Vortag über SMA200 und SMA50 schloss, sonst flach; einmal je UTC-Tag, nur aufstocken. Kapitulations-Trades haben Vorrang (der Anteil gibt Margin ab); solange er offen ist, ruhen eigene BTC-Kapitulationssignale. Nachspiel mit dem Bot-Code 2020–2026 zusammen: 100 → 3.431, +77 %/J, größter Rückgang −45 % (BTC halten 530, −77 %). aus = Anteil wird geschlossen."
+    "_info": "BTC-Trend-Anteil (long faktor × Kontowert bei hebel, isoliert), solange BTC am Vortag über SMA200 und SMA50 schloss, sonst flach; einmal je UTC-Tag, nur aufstocken. Kapitulations-Trades haben Vorrang (der Anteil gibt Margin ab); solange er offen ist, ruhen eigene BTC-Kapitulationssignale, und solange eine BTC-Kapitulation offen ist, eröffnet oder vergrößert der Anteil nicht. Nachspiel mit dem Bot-Code 2020–2026 zusammen: 100 → 3.429, +77 %/J, größter Rückgang −45 % (BTC halten 530, −77 %). aus = Anteil wird geschlossen."
   }
 }
