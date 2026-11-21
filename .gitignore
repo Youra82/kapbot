@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+.venv/
+data/
+secret.json
+_aus_evobot/

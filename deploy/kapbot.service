@@ -1,0 +1,19 @@
+[Unit]
+Description=kapbot (BTC-Trend + Kapitulation kaufen, alle 5 Minuten, Papier/Echtgeld laut settings.json)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# als der Benutzer, der installiert hat (nicht root): Daten bleiben für Cockpit und Bedienung lesbar
+User=@USER@
+Type=oneshot
+WorkingDirectory=@ROOT@
+Environment=KAPBOT_ROOT=@ROOT@
+ExecStart=@ROOT@/.venv/bin/python -m kapbot run --data @ROOT@/data --telegram
+UMask=0077
+NoNewPrivileges=true
+Nice=10
+MemoryMax=192M
+MemorySwapMax=0
+# erster Lauf lädt 90 Tage 5m-Kerzen und Open Interest für 30 Coins nach (≈ 10–15 min)
+TimeoutStartSec=1800

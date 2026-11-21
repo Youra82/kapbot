@@ -1,0 +1,22 @@
+{
+  "_info": "kapbot-Schalter. Gehört zum Repo: am Desktop ändern und pushen, ./update.sh holt den Stand auf den MiniPC und behält dabei deinen echtgeld-Schalter. Änderungen greifen beim nächsten 5-Minuten-Lauf.",
+  "echtgeld": {
+    "aktiv": false,
+    "papier_startkapital": 100,
+    "_info": "Wie jaegerbot: true = echte Orders auf Bitget über secret.json-Eintrag 'kapbot' (am besten ein eigenes Unterkonto, wenn andere Bots dieselben Coins handeln), Konto data/echtgeld. false = Papierhandel mit echten Bitget-Kursen, Spread, Gebühren und Funding, Konto data/papier/konto.json (Start papier_startkapital), Telegram mit PAPIER-Kennung. Wird bei jedem Lauf neu gelesen; ein Wechsel wird einmal gemeldet; offene Positionen des anderen Modus werden trotzdem regulär geschlossen."
+  },
+  "kapbot": {
+    "aktiv": true,
+    "einsatz": 0.1,
+    "einsatz_viel_liq": 0.05,
+    "hebel": 1,
+    "max_offen": 20,
+    "_info": "Kapitulation kaufen (Forschung 20./21.11.2026, botprojekte/forschung/2026-11-20-btc-abverkaeufe): Long 24 h nach 15-min-Flush (z ≤ −4), wenn Open Interest in 6 h ≥ 3 % gefallen, Long-Anteil der Kleinanleger kleiner als vor 72 h und Kurs ≥ 20 % unter 90-Tage-Hoch; 30 Coins, alle 5 Minuten. einsatz × Kontowert je Trade, wenn unter dem Kurs wenig Liquidationen liegen (Modell-Karte aus 90 Tagen Open Interest), sonst einsatz_viel_liq; hebel 1–5; max_offen gleichzeitig (1–30). aus = keine neuen Trades, offene laufen regulär aus."
+  },
+  "btc_trend": {
+    "aktiv": true,
+    "faktor": 1.0,
+    "hebel": 5,
+    "_info": "BTC-Trend-Anteil (long faktor × Kontowert bei hebel, isoliert), solange BTC am Vortag über SMA200 und SMA50 schloss, sonst flach; einmal je UTC-Tag, nur aufstocken. Kapitulations-Trades haben Vorrang (der Anteil gibt Margin ab); solange er offen ist, ruhen eigene BTC-Kapitulationssignale. Backtest 2020–2026 zusammen: 100 → 3.615, +78 %/J, größter Rückgang −45 % (BTC halten 509, −77 %). aus = Anteil wird geschlossen."
+  }
+}
